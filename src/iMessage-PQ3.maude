@@ -1,0 +1,1183 @@
+
+***(
+
+    ┌────────────────────────────────────────────────────────────────────────────────────────┐
+    │                                                                                        │
+    │                    Alice                                        Bob                    │
+    │                                                                                        │
+    │         ┌─────────────────────────┐                 ┌─────────────────────────┐        │
+    │         │    UserRegistration*    │                 │    UserRegistration*    │        │
+    │         └─────────────────────────┘                 └─────────────────────────┘        │
+    │                                                                                        │
+    │                     ...                                          ...                   │
+    │                                                                                        │
+    │         ┌─────────────────────────┐                                                    │
+    │         │      SessionStartS      │                                                    │
+    │         └─────────────────────────┘     ──────>     ┌─────────────────────────┐        │
+    │                                                     │      SessionStartR      │        │
+    │                                         <──────     └─────────────────────────┘        │
+    │                                                                                        │
+    │                     ...                                          ...                   │
+    │                                                                                        │
+    │         ┌─────────────────────────┐                                                    │
+    │         │    AsymmetricRatchet    │                                                    │
+    │         └─────────────────────────┘     ──────>                                        │
+    │                                                                                        │
+    └────────────────────────────────────────────────────────────────────────────────────────┘
+
+    *       the user registration phase is run by each party P when they first set up their device.
+    ...     an undefined range of time between the messages.
+
+)***
+
+fmod PROTOCOL-EXAMPLE-SYMBOLS is
+    protecting DEFINITION-PROTOCOL-RULES .
+
+    ---
+    --- [General Sorts/Operators]
+    ---
+    sort Name .
+    
+    subsort Name    < Msg       .
+    subsort Name    < Public    .
+
+    op _;_              : Msg Msg   -> Msg [frozen gather (e E)]    .
+    ops alice bob eve   :           -> Name                         .
+
+
+    ---
+    --- [Hash Sorts/Operators]
+    ---
+    sort Hash .
+    subsort Hash < Msg .
+
+    op h : Msg -> Hash  [frozen] .
+
+
+    ---
+    --- [Signature Sorts/Operators]
+    ---
+    sort Signature .
+    subsort Signature < Msg .
+
+    op sig : Name NeNonceSet Msg -> Signature [frozen] .
+
+
+    ---
+    --- [Diffie-Hellman Sorts/Operators]
+    ---
+    sorts Nonce NeNonceSet Gen Exp GenvExp Key Secret .
+
+    subsort NeNonceSet GenvExp Key Secret       < Msg           .
+    subsort Nonce                               < NeNonceSet    .
+    subsort Gen Exp                             < GenvExp       .
+    subsort Exp                                 < Key           .
+    subsort Gen                                 < Public        .
+
+    op _*_      : NeNonceSet NeNonceSet -> NeNonceSet   [frozen assoc comm] .    
+
+    op g        :                       -> Gen                      .
+    op dhsec    : Name Fresh            -> Secret 	    [frozen]    .   
+    op enc      : Key Msg               -> Msg 			[frozen]    .
+    op dec      : Key Msg               -> Msg 			[frozen]    .
+    op exp      : GenvExp NeNonceSet    -> Exp 			[frozen]    .
+    op n        : Name Fresh            -> Nonce 		[frozen]    . 
+
+
+    ---
+    --- [Post-Quantum Key Encapsulation Mechanism Sorts/Operators]
+    ---
+    sorts Matrix Vector Ciphertext PQSharedSecret .
+
+    subsort Matrix Vector Ciphertext PQSharedSecret     < Msg   .
+    subsort PQSharedSecret                              < Hash  .
+    
+
+    op a    : Hash  -> Matrix [frozen] .
+    op s    : Hash  -> Vector [frozen] .
+    op e    : Hash  -> Vector [frozen] .
+
+    op _**_     : Matrix Vector -> Vector [frozen]              .
+    op _++_     : Vector Vector -> Vector [frozen assoc comm]   .
+    op _--_     : Vector Vector -> Vector [frozen]              .
+
+    op encapct      : Vector Nonce              -> Ciphertext       [frozen] .
+    op encapss      : Vector Nonce              -> PQSharedSecret   [frozen] .
+    op decap        : Vector Ciphertext         -> PQSharedSecret   [frozen] .
+    
+    ---
+    --- [Protocol Phases Sorts/Operators]
+    ---
+    sorts SessionStartS SessionStartR AsymRatchet .
+
+    subsort SessionStartS SessionStartR AsymRatchet < Msg .
+    
+    op sessionstarts        : Exp Ciphertext Vector Hash Signature      -> SessionStartS    .
+    op sessionstartr        : Exp Ciphertext Vector Signature           -> SessionStartR    .
+    op asymratchet          : Exp Ciphertext Vector Signature           -> AsymRatchet      .
+endfm
+
+fmod PROTOCOL-EXAMPLE-ALGEBRAIC is
+    protecting PROTOCOL-EXAMPLE-SYMBOLS .
+
+    ---
+    --- [Diffie-Hellman Algebraic Properties]
+    ---
+    eq exp(exp(x:Gen, y:NeNonceSet), z:NeNonceSet) = 
+       exp(x:Gen, y:NeNonceSet * z:NeNonceSet) 
+    [variant] .
+
+    eq enc(x:Key, dec(x:Key, y:Msg)) = 
+       y:Msg
+    [variant] .
+
+    eq dec(x:Key, enc(x:Key, y:Msg)) = 
+       y:Msg
+    [variant] .
+
+
+    ---
+    --- [Post-Quantum Key Encapsulation Mechanism Algebraic Properties]
+    ---
+
+    --- Encapsulate SS
+    eq encapss(x:Matrix ** y:Vector ++ z:Vector, n(w:Name, u:Fresh)) =
+       h(h(h(n(w:Name, u:Fresh)) ; h(x:Matrix ** y:Vector ++ z:Vector)) ; h(encapct(x:Matrix ** y:Vector ++ z:Vector, n(w:Name, u:Fresh))))
+    [variant] .
+endfm
+
+fmod PROTOCOL-SPECIFICATION is
+    protecting PROTOCOL-EXAMPLE-SYMBOLS .
+    protecting DEFINITION-PROTOCOL-RULES .
+    protecting DEFINITION-CONSTRAINTS-INPUT .
+
+    vars r1 r2 r3 r4 r5 r6 r7 r8 r9             : Fresh .
+    vars r1' r2' r3' r4'                        : Fresh .
+
+    var IDECSKS                                 : NeNonceSet .
+    vars RCHECPKSS1 PREECPKR RCHECPKSSJPLUS2    : Exp .
+    vars RCHPQPKSS1 PREPQPKR RCHPQPKSSJPLUS2    : Vector .
+    vars PREPQCTSS RCHPQCTSSJPLUS1              : Ciphertext .
+
+    var IDECSKR     : NeNonceSet .
+    var RCHECPKRR2  : Exp .
+    var RCHPQCTRR1  : Ciphertext .
+    var RCHPQPKRR2  : Vector .
+
+***(
+
+    IDECSKS             = n(alice, r6)
+    IDECSKR             = n(bob, r4')
+    PREECPKR            = exp(g, n(bob, r5))
+    RCHECPKSS1          = exp(g, n(alice, r1))
+    RCHECPKRR2          = exp(g, n(bob, r1'))
+    RCHECPKSSJPLUS2     = exp(g, n(alice, r7))
+
+    PREPQPKR            = a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2)))
+    RCHPQPKSS1          = a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4)))
+    RCHPQPKRR2          = a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3')))
+    RCHPQPKSSJPLUS2     = a(h(n(alice, r9))) ** s(h(n(alice, r9))) ++ e(h(n(alice, r9)))
+
+    PREPQCTSS           = encapct(a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2))), n(alice, r3))
+    RCHPQCTRR1          = encapct(RCHPQPKSS1, n(bob, r2'))
+    RCHPQCTSSJPLUS1     = encapct(RCHPQPKRR2, n(alice, r8))
+
+)***
+    
+	eq STRANDS-DOLEVYAO =
+		--- 
+		--- [General Intruder Actions]
+		---
+		:: nil ::   [nil | 
+                        -(x:Msg ; y:Msg), 
+                        +(x:Msg), nil] &
+		:: nil ::   [nil | 
+                        -(x:Msg ; y:Msg), 
+                        +(y:Msg), nil] &
+		:: nil ::   [nil | 
+                        -(x:Msg), -(y:Msg), 
+                        +(x:Msg ; y:Msg), nil]  &
+
+
+        --- 
+		--- [Hash Intruder Actions]
+		---
+		:: nil ::   [nil | 
+                        -(x:Msg), 
+                        +(h(x:Msg)), nil] &
+
+
+        --- 
+		--- [Signature Intruder Actions]
+		---
+		:: x:Fresh ::   [nil | 
+                        -(y:Msg), 
+                        +(sig(eve, n(eve, x:Fresh), y:Msg)), nil] &
+
+
+		---
+		--- [Diffie-Hellman Intruder Actions]
+		---
+		:: nil :: 		[nil | 
+                            -(x:Key), -(y:Msg), 
+                            +(enc(x:Key, y:Msg)), nil] &
+		:: nil :: 		[nil | 
+                            -(x:Key), -(y:Msg), 
+                            +(dec(x:Key, y:Msg)), nil] &
+        :: nil :: 		[nil | 
+                            -(x:NeNonceSet), 
+                            +(exp(g, x:NeNonceSet)), nil] &
+        :: nil :: 		[nil | 
+                            -(exp(g, x:NeNonceSet)), 
+                            +(x:NeNonceSet), nil] &
+        :: nil :: 		[nil | 
+                            -(x:NeNonceSet), -(y:NeNonceSet), 
+                            +(x:NeNonceSet * y:NeNonceSet), nil] &
+        :: nil :: 		[nil | 
+                             
+                            +(g), nil] &
+		:: x:Fresh :: 	[nil | 
+                        
+                            +(n(eve, x:Fresh)), nil] &
+
+
+        ---
+        --- [Post-Quantum Key Encapsulation Mechanism Intruder Actions]
+        --- 
+        :: nil ::       [nil |
+                            -(x:Hash),
+                            +(a(x:Hash)), nil] &
+        :: nil ::       [nil |
+                            -(x:Hash),
+                            +(s(x:Hash)), nil] &
+        :: nil ::       [nil |
+                            -(x:Hash),
+                            +(e(x:Hash)), nil] &
+        :: nil ::       [nil |
+                            -(x:Matrix), -(y:Vector),
+                            +(x:Matrix ** y:Vector), nil] &
+        :: nil ::       [nil |
+                            -(x:Vector), -(y:Vector),
+                            +(x:Vector ++ y:Vector), nil] &
+        :: nil ::       [nil |
+                            -(x:Vector), -(y:Vector),
+                            +(x:Vector -- y:Vector), nil] &
+        :: x:Fresh ::   [nil |
+                            -(y:Vector),
+                            +(encapct(y:Vector, n(eve, x:Fresh))), nil] &
+        :: x:Fresh ::   [nil |
+                            -(y:Vector),
+                            +(encapss(y:Vector, n(eve, x:Fresh))), nil] &
+        :: nil ::       [nil |
+                            -(x:Vector), -(y:Ciphertext),
+                            +(decap(x:Vector, y:Ciphertext)), nil] &
+
+
+        ---
+        --- [SessionStartS Intruder Actions]
+        ---
+        :: nil ::   [nil | 
+                        -(sessionstarts(x:Exp, y:Ciphertext, z:Vector, w:Hash, u:Signature)), 
+                        +(x:Exp), nil] &
+        :: nil ::   [nil | 
+                        -(sessionstarts(x:Exp, y:Ciphertext, z:Vector, w:Hash, u:Signature)), 
+                        +(y:Ciphertext), nil] &
+        :: nil ::   [nil | 
+                        -(sessionstarts(x:Exp, y:Ciphertext, z:Vector, w:Hash, u:Signature)), 
+                        +(z:Vector), nil] &
+        :: nil ::   [nil | 
+                        -(sessionstarts(x:Exp, y:Ciphertext, z:Vector, w:Hash, u:Signature)), 
+                        +(w:Hash), nil] &
+        :: nil ::   [nil | 
+                        -(sessionstarts(x:Exp, y:Ciphertext, z:Vector, w:Hash, u:Signature)), 
+                        +(u:Signature), nil] & 
+        :: nil ::   [nil | 
+                        -(x:Exp), -(y:Ciphertext), -(z:Vector), -(w:Hash), -(u:Signature),
+                        +(sessionstarts(x:Exp, y:Ciphertext, z:Vector, w:Hash, u:Signature)), nil] &
+
+
+        ---
+        --- [SessionStartR Intruder Actions]
+        ---
+        :: nil ::   [nil | 
+                        -(sessionstartr(x:Exp, y:Ciphertext, z:Vector, w:Signature)), 
+                        +(x:Exp), nil] &
+        :: nil ::   [nil | 
+                        -(sessionstartr(x:Exp, y:Ciphertext, z:Vector, w:Signature)), 
+                        +(y:Ciphertext), nil] &
+        :: nil ::   [nil | 
+                        -(sessionstartr(x:Exp, y:Ciphertext, z:Vector, w:Signature)), 
+                        +(z:Vector), nil] &
+        :: nil ::   [nil | 
+                        -(sessionstartr(x:Exp, y:Ciphertext, z:Vector, w:Signature)), 
+                        +(w:Signature), nil] &
+        :: nil ::   [nil | 
+                        -(x:Exp), -(y:Ciphertext), -(z:Vector), -(w:Signature),
+                        +(sessionstartr(x:Exp, y:Ciphertext, z:Vector, w:Signature)), nil] &
+
+
+        ---
+        --- [AsymRatchet Intruder Actions]
+        ---
+        :: nil ::   [nil | 
+                        -(asymratchet(x:Exp, y:Ciphertext, z:Vector, w:Signature)), 
+                        +(x:Exp), nil] &
+        :: nil ::   [nil | 
+                        -(asymratchet(x:Exp, y:Ciphertext, z:Vector, w:Signature)), 
+                        +(y:Ciphertext), nil] &
+        :: nil ::   [nil | 
+                        -(asymratchet(x:Exp, y:Ciphertext, z:Vector, w:Signature)), 
+                        +(z:Vector), nil] &
+        :: nil ::   [nil | 
+                        -(asymratchet(x:Exp, y:Ciphertext, z:Vector, w:Signature)), 
+                        +(w:Signature), nil] &
+        :: nil ::   [nil | 
+                        -(x:Exp), -(y:Ciphertext), -(z:Vector), -(w:Signature),
+                        +(asymratchet(x:Exp, y:Ciphertext, z:Vector, w:Signature)), nil]
+	[nonexec] .
+
+
+    eq EXTRA-GRAMMARS = 
+    (
+        grl empty => (x:NeNonceSet * n(alice, y:Fresh)) inL . ;
+        grl empty => n(alice, y:Fresh)                  inL . ;
+        grl empty => (x:NeNonceSet * n(bob, y:Fresh))   inL . ;
+        grl empty => n(bob, y:Fresh)                    inL .
+        ! S2 
+    )
+    [nonexec] .
+
+
+	eq STRANDS-PROTOCOL =
+		:: r1, r2, r3, r4, r5, r6, r7, r8, r9 ::
+		[nil | 
+		+   (sessionstarts(
+                exp(g, n(alice, r1)),
+                encapct(a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2))), n(alice, r3)),
+                a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))),
+                h(exp(g, n(bob, r5)) ; a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2)))),
+                sig(
+                    alice, 
+                    n(alice, r6), 
+                    exp(g, n(alice, r1)) ; encapct(a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2))), n(alice, r3)) ; (a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4)))) ; h(exp(g, n(bob, r5)) ; a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2)))) 
+                )
+            )),
+        -   (sessionstartr(
+                RCHECPKRR2,
+                RCHPQCTRR1,
+                RCHPQPKRR2,
+                sig(bob, IDECSKR, RCHECPKRR2 ; RCHPQCTRR1 ; RCHPQPKRR2)
+            )),
+        +   (asymratchet(
+                exp(g, n(alice, r7)),
+                encapct(RCHPQPKRR2, n(alice, r8)),
+                a(h(n(alice, r9))) ** s(h(n(alice, r9))) ++ e(h(n(alice, r9))),
+                sig(
+                    alice,
+                    n(alice, r6),
+                    exp(g, n(alice, r7)) ; encapct(RCHPQPKRR2, n(alice, r8)) ; (a(h(n(alice, r9))) ** s(h(n(alice, r9))) ++ e(h(n(alice, r9))))
+                )
+            )) 
+        , nil] &
+
+		:: r1', r2', r3', r4' ::
+		[nil |
+		-   (sessionstarts(
+                RCHECPKSS1,
+                PREPQCTSS,
+                RCHPQPKSS1,
+                h(PREECPKR ; PREPQPKR),
+                sig(alice, IDECSKS, RCHECPKSS1 ; PREPQCTSS ; RCHPQPKSS1 ; h(PREECPKR ; PREPQPKR)) 
+            )),
+        +   (sessionstartr(
+                exp(g, n(bob, r1')),
+                encapct(RCHPQPKSS1, n(bob, r2')),
+                a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))),
+                sig(
+                    bob, 
+                    n(bob, r4'),
+                    exp(g, n(bob, r1')) ; encapct(RCHPQPKSS1, n(bob, r2')) ; (a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))))
+                )
+            )),
+        -   (asymratchet(
+                RCHECPKSSJPLUS2,
+                RCHPQCTSSJPLUS1,
+                RCHPQPKSSJPLUS2,
+                sig(alice, IDECSKS, RCHECPKSSJPLUS2 ; RCHPQCTSSJPLUS1 ; RCHPQPKSSJPLUS2)
+            ))       
+        , nil]
+	[nonexec] .
+
+    --- Protocol Behavior
+    eq ATTACK-STATE(100) =
+        :: r1, r2, r3, r4, r5, r6, r7, r8, r9 ::
+        [nil, 
+        +   (sessionstarts(
+                exp(g, n(alice, r1)),
+                encapct(a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2))), n(alice, r3)),
+                a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))),
+                h(exp(g, n(bob, r5)) ; a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2)))),
+                sig(
+                    alice, 
+                    n(alice, r6), 
+                    exp(g, n(alice, r1)) ; encapct(a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2))), n(alice, r3)) ; (a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4)))) ; h(exp(g, n(bob, r5)) ; a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2)))) 
+                )
+            )),
+        -   (sessionstartr(
+                RCHECPKRR2,
+                RCHPQCTRR1,
+                RCHPQPKRR2,
+                sig(bob, IDECSKR, RCHECPKRR2 ; RCHPQCTRR1 ; RCHPQPKRR2)
+            )),
+        +   (asymratchet(
+                exp(g, n(alice, r7)),
+                encapct(RCHPQPKRR2, n(alice, r8)),
+                a(h(n(alice, r9))) ** s(h(n(alice, r9))) ++ e(h(n(alice, r9))),
+                sig(
+                    alice,
+                    n(alice, r6),
+                    exp(g, n(alice, r7)) ; encapct(RCHPQPKRR2, n(alice, r8)) ; (a(h(n(alice, r9))) ** s(h(n(alice, r9))) ++ e(h(n(alice, r9))))
+                )
+            ))       
+        | nil] &
+
+        :: r1', r2', r3', r4' ::
+        [nil,
+        -   (sessionstarts(
+                RCHECPKSS1,
+                PREPQCTSS,
+                RCHPQPKSS1,
+                h(PREECPKR ; PREPQPKR),
+                sig(alice, IDECSKS, RCHECPKSS1 ; PREPQCTSS ; RCHPQPKSS1 ; h(PREECPKR ; PREPQPKR)) 
+            )),
+        +   (sessionstartr(
+                exp(g, n(bob, r1')),
+                encapct(RCHPQPKSS1, n(bob, r2')),
+                a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))),
+                sig(
+                    bob, 
+                    n(bob, r4'),
+                    exp(g, n(bob, r1')) ; encapct(RCHPQPKSS1, n(bob, r2')) ; (a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))))
+                )
+            )),
+        -   (asymratchet(
+                RCHECPKSSJPLUS2,
+                RCHPQCTSSJPLUS1,
+                RCHPQPKSSJPLUS2,
+                sig(alice, IDECSKS, RCHECPKSSJPLUS2 ; RCHPQCTSSJPLUS1 ; RCHPQPKSSJPLUS2)
+            ))       
+        | nil]
+        || empty
+        || nil
+        || nil
+        || nil
+    [nonexec] .
+
+    --- Authentication
+    eq ATTACK-STATE(0) =
+        :: r1, r2, r3, r4, r5, r6, r7, r8, r9 ::
+        [nil,
+        +   (sessionstarts(
+                exp(g, n(alice, r1)),
+                encapct(a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2))), n(alice, r3)),
+                a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))),
+                h(exp(g, n(bob, r5)) ; a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2)))),
+                sig(
+                    alice, 
+                    n(alice, r6), 
+                    exp(g, n(alice, r1)) ; encapct(a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2))), n(alice, r3)) ; (a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4)))) ; h(exp(g, n(bob, r5)) ; a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2)))) 
+                )
+            )),
+        -   (sessionstartr(
+                exp(g, n(bob, r1')),
+                encapct(a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))), n(bob, r2')),
+                a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))),
+                sig(
+                    bob, 
+                    n(bob, r4'),
+                    exp(g, n(bob, r1')) ; encapct(a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))), n(bob, r2')) ; (a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))))
+                )
+            )),
+        +   (asymratchet(
+                exp(g, n(alice, r7)),
+                encapct(a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))), n(alice, r8)),
+                a(h(n(alice, r9))) ** s(h(n(alice, r9))) ++ e(h(n(alice, r9))),
+                sig(
+                    alice,
+                    n(alice, r6),
+                    exp(g, n(alice, r7)) ; encapct(a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))), n(alice, r8)) ; (a(h(n(alice, r9))) ** s(h(n(alice, r9))) ++ e(h(n(alice, r9))))
+                )
+            ))
+        | nil]
+        || empty
+        || nil
+        || nil
+        || never(
+            :: r1', r2', r3', r4' ::
+            [nil |
+            -   (sessionstarts(
+                    exp(g, n(alice, r1)),
+                    encapct(a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2))), n(alice, r3)),
+                    a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))),
+                    h(exp(g, n(bob, r5)) ; a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2)))),
+                    sig(
+                        alice, 
+                        n(alice, r6), 
+                        exp(g, n(alice, r1)) ; encapct(a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2))), n(alice, r3)) ; (a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4)))) ; h(exp(g, n(bob, r5)) ; a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2)))) 
+                    )
+                )),
+                +   (sessionstartr(
+                    exp(g, n(bob, r1')),
+                    encapct(a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))), n(bob, r2')),
+                    a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))),
+                    sig(
+                        bob, 
+                        n(bob, r4'),
+                        exp(g, n(bob, r1')) ; encapct(a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))), n(bob, r2')) ; (a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))))
+                    )
+                )),
+            -   (asymratchet(
+                    exp(g, n(alice, r7)),
+                    encapct(a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))), n(alice, r8)),
+                    a(h(n(alice, r9))) ** s(h(n(alice, r9))) ++ e(h(n(alice, r9))),
+                    sig(
+                        alice,
+                        n(alice, r6),
+                        exp(g, n(alice, r7)) ; encapct(a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))), n(alice, r8)) ; (a(h(n(alice, r9))) ** s(h(n(alice, r9))) ++ e(h(n(alice, r9))))
+                    )
+                ))
+            , nil] & S:StrandSet || I:IntruderKnowledge
+        ) [nonexec] .
+
+    --- SessionStartS ecss
+    eq ATTACK-STATE(1) =
+        :: r1, r2, r3, r4, r5, r6, r7, r8, r9 ::
+        [nil, 
+        +   (sessionstarts(
+                exp(g, n(alice, r1)),
+                encapct(a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2))), n(alice, r3)),
+                a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))),
+                h(exp(g, n(bob, r5)) ; a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2)))),
+                sig(
+                    alice, 
+                    n(alice, r6), 
+                    exp(g, n(alice, r1)) ; encapct(a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2))), n(alice, r3)) ; (a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4)))) ; h(exp(g, n(bob, r5)) ; a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2)))) 
+                )
+            )),
+        -   (sessionstartr(
+                exp(g, n(bob, r1')),
+                encapct(a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))), n(bob, r2')),
+                a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))),
+                sig(
+                    bob, 
+                    n(bob, r4'),
+                    exp(g, n(bob, r1')) ; encapct(a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))), n(bob, r2')) ; (a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))))
+                )
+            )),
+        +   (asymratchet(
+                exp(g, n(alice, r7)),
+                encapct(a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))), n(alice, r8)),
+                a(h(n(alice, r9))) ** s(h(n(alice, r9))) ++ e(h(n(alice, r9))),
+                sig(
+                    alice,
+                    n(alice, r6),
+                    exp(g, n(alice, r7)) ; encapct(a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))), n(alice, r8)) ; (a(h(n(alice, r9))) ** s(h(n(alice, r9))) ++ e(h(n(alice, r9))))
+                )
+            )) 
+        | nil]
+        || exp(exp(g, n(bob, r5)), n(alice, r1)) inI, empty
+        || nil
+        || nil
+        || nil
+    [nonexec] .
+
+    --- SessionStartS pqss
+    eq ATTACK-STATE(2) =
+        :: r1, r2, r3, r4, r5, r6, r7, r8, r9 ::
+        [nil, 
+        +   (sessionstarts(
+                exp(g, n(alice, r1)),
+                encapct(a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2))), n(alice, r3)),
+                a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))),
+                h(exp(g, n(bob, r5)) ; a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2)))),
+                sig(
+                    alice, 
+                    n(alice, r6), 
+                    exp(g, n(alice, r1)) ; encapct(a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2))), n(alice, r3)) ; (a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4)))) ; h(exp(g, n(bob, r5)) ; a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2)))) 
+                )
+            )),
+        -   (sessionstartr(
+                exp(g, n(bob, r1')),
+                encapct(a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))), n(bob, r2')),
+                a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))),
+                sig(
+                    bob, 
+                    n(bob, r4'),
+                    exp(g, n(bob, r1')) ; encapct(a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))), n(bob, r2')) ; (a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))))
+                )
+            )),
+        +   (asymratchet(
+                exp(g, n(alice, r7)),
+                encapct(a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))), n(alice, r8)),
+                a(h(n(alice, r9))) ** s(h(n(alice, r9))) ++ e(h(n(alice, r9))),
+                sig(
+                    alice,
+                    n(alice, r6),
+                    exp(g, n(alice, r7)) ; encapct(a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))), n(alice, r8)) ; (a(h(n(alice, r9))) ** s(h(n(alice, r9))) ++ e(h(n(alice, r9))))
+                )
+            ))  
+        | nil]
+        || encapss(a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2))), n(alice, r3)) inI, empty
+        || nil
+        || nil
+        || nil
+    [nonexec] .
+
+    --- SessionStartR ecss
+    eq ATTACK-STATE(3) =
+        :: r1, r2, r3, r4, r5, r6, r7, r8, r9 ::
+        [nil, 
+        +   (sessionstarts(
+                exp(g, n(alice, r1)),
+                encapct(a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2))), n(alice, r3)),
+                a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))),
+                h(exp(g, n(bob, r5)) ; a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2)))),
+                sig(
+                    alice, 
+                    n(alice, r6), 
+                    exp(g, n(alice, r1)) ; encapct(a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2))), n(alice, r3)) ; (a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4)))) ; h(exp(g, n(bob, r5)) ; a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2)))) 
+                )
+            )),
+        -   (sessionstartr(
+                exp(g, n(bob, r1')),
+                encapct(a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))), n(bob, r2')),
+                a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))),
+                sig(
+                    bob, 
+                    n(bob, r4'),
+                    exp(g, n(bob, r1')) ; encapct(a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))), n(bob, r2')) ; (a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))))
+                )
+            )),
+        +   (asymratchet(
+                exp(g, n(alice, r7)),
+                encapct(a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))), n(alice, r8)),
+                a(h(n(alice, r9))) ** s(h(n(alice, r9))) ++ e(h(n(alice, r9))),
+                sig(
+                    alice,
+                    n(alice, r6),
+                    exp(g, n(alice, r7)) ; encapct(a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))), n(alice, r8)) ; (a(h(n(alice, r9))) ** s(h(n(alice, r9))) ++ e(h(n(alice, r9))))
+                )
+            )) 
+        | nil]
+        || exp(exp(g, n(alice, r1)), n(bob, r5)) inI, empty
+        || nil
+        || nil
+        || nil
+    [nonexec] .
+
+    --- SessionStartR pqss
+    eq ATTACK-STATE(4) =
+        :: r1, r2, r3, r4, r5, r6, r7, r8, r9 ::
+        [nil, 
+        +   (sessionstarts(
+                exp(g, n(alice, r1)),
+                encapct(a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2))), n(alice, r3)),
+                a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))),
+                h(exp(g, n(bob, r5)) ; a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2)))),
+                sig(
+                    alice, 
+                    n(alice, r6), 
+                    exp(g, n(alice, r1)) ; encapct(a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2))), n(alice, r3)) ; (a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4)))) ; h(exp(g, n(bob, r5)) ; a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2)))) 
+                )
+            )),
+        -   (sessionstartr(
+                exp(g, n(bob, r1')),
+                encapct(a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))), n(bob, r2')),
+                a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))),
+                sig(
+                    bob, 
+                    n(bob, r4'),
+                    exp(g, n(bob, r1')) ; encapct(a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))), n(bob, r2')) ; (a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))))
+                )
+            )),
+        +   (asymratchet(
+                exp(g, n(alice, r7)),
+                encapct(a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))), n(alice, r8)),
+                a(h(n(alice, r9))) ** s(h(n(alice, r9))) ++ e(h(n(alice, r9))),
+                sig(
+                    alice,
+                    n(alice, r6),
+                    exp(g, n(alice, r7)) ; encapct(a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))), n(alice, r8)) ; (a(h(n(alice, r9))) ** s(h(n(alice, r9))) ++ e(h(n(alice, r9))))
+                )
+            )) 
+        | nil]
+        || decap(s(h(n(bob, r2))), encapct(a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2))), n(alice, r3))) inI, empty
+        || nil
+        || nil
+        || nil
+    [nonexec] .
+
+    --- SessionStartR ecss'
+    eq ATTACK-STATE(5) =
+        :: r1, r2, r3, r4, r5, r6, r7, r8, r9 ::
+        [nil, 
+        +   (sessionstarts(
+                exp(g, n(alice, r1)),
+                encapct(a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2))), n(alice, r3)),
+                a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))),
+                h(exp(g, n(bob, r5)) ; a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2)))),
+                sig(
+                    alice, 
+                    n(alice, r6), 
+                    exp(g, n(alice, r1)) ; encapct(a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2))), n(alice, r3)) ; (a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4)))) ; h(exp(g, n(bob, r5)) ; a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2)))) 
+                )
+            )),
+        -   (sessionstartr(
+                exp(g, n(bob, r1')),
+                encapct(a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))), n(bob, r2')),
+                a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))),
+                sig(
+                    bob, 
+                    n(bob, r4'),
+                    exp(g, n(bob, r1')) ; encapct(a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))), n(bob, r2')) ; (a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))))
+                )
+            )),
+        +   (asymratchet(
+                exp(g, n(alice, r7)),
+                encapct(a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))), n(alice, r8)),
+                a(h(n(alice, r9))) ** s(h(n(alice, r9))) ++ e(h(n(alice, r9))),
+                sig(
+                    alice,
+                    n(alice, r6),
+                    exp(g, n(alice, r7)) ; encapct(a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))), n(alice, r8)) ; (a(h(n(alice, r9))) ** s(h(n(alice, r9))) ++ e(h(n(alice, r9))))
+                )
+            )) 
+        | nil]  &
+
+		:: r1', r2', r3', r4' ::
+		[nil,
+		-   (sessionstarts(
+                exp(g, n(alice, r1)),
+                encapct(a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2))), n(alice, r3)),
+                a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))),
+                h(exp(g, n(bob, r5)) ; a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2)))),
+                sig(
+                    alice, 
+                    n(alice, r6), 
+                    exp(g, n(alice, r1)) ; encapct(a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2))), n(alice, r3)) ; (a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4)))) ; h(exp(g, n(bob, r5)) ; a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2)))) 
+                )
+            )),
+        +   (sessionstartr(
+                exp(g, n(bob, r1')),
+                encapct(a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))), n(bob, r2')),
+                a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))),
+                sig(
+                    bob, 
+                    n(bob, r4'),
+                    exp(g, n(bob, r1')) ; encapct(a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))), n(bob, r2')) ; (a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))))
+                )
+            )),
+        -   (asymratchet(
+                exp(g, n(alice, r7)),
+                encapct(a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))), n(alice, r8)),
+                a(h(n(alice, r9))) ** s(h(n(alice, r9))) ++ e(h(n(alice, r9))),
+                sig(
+                    alice,
+                    n(alice, r6),
+                    exp(g, n(alice, r7)) ; encapct(a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))), n(alice, r8)) ; (a(h(n(alice, r9))) ** s(h(n(alice, r9))) ++ e(h(n(alice, r9))))
+                )
+            ))     
+        | nil]
+        || exp(exp(g, n(alice, r1)), n(bob, r1')) inI, empty
+        || nil
+        || nil
+        || nil
+    [nonexec] .
+
+    --- SessionStartR pqss'
+    eq ATTACK-STATE(6) =
+        :: r1, r2, r3, r4, r5, r6, r7, r8, r9 ::
+        [nil, 
+        +   (sessionstarts(
+                exp(g, n(alice, r1)),
+                encapct(a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2))), n(alice, r3)),
+                a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))),
+                h(exp(g, n(bob, r5)) ; a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2)))),
+                sig(
+                    alice, 
+                    n(alice, r6), 
+                    exp(g, n(alice, r1)) ; encapct(a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2))), n(alice, r3)) ; (a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4)))) ; h(exp(g, n(bob, r5)) ; a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2)))) 
+                )
+            )),
+        -   (sessionstartr(
+                exp(g, n(bob, r1')),
+                encapct(a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))), n(bob, r2')),
+                a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))),
+                sig(
+                    bob, 
+                    n(bob, r4'),
+                    exp(g, n(bob, r1')) ; encapct(a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))), n(bob, r2')) ; (a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))))
+                )
+            )),
+        +   (asymratchet(
+                exp(g, n(alice, r7)),
+                encapct(a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))), n(alice, r8)),
+                a(h(n(alice, r9))) ** s(h(n(alice, r9))) ++ e(h(n(alice, r9))),
+                sig(
+                    alice,
+                    n(alice, r6),
+                    exp(g, n(alice, r7)) ; encapct(a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))), n(alice, r8)) ; (a(h(n(alice, r9))) ** s(h(n(alice, r9))) ++ e(h(n(alice, r9))))
+                )
+            )) 
+        | nil]  &
+
+		:: r1', r2', r3', r4' ::
+		[nil,
+		-   (sessionstarts(
+                exp(g, n(alice, r1)),
+                encapct(a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2))), n(alice, r3)),
+                a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))),
+                h(exp(g, n(bob, r5)) ; a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2)))),
+                sig(
+                    alice, 
+                    n(alice, r6), 
+                    exp(g, n(alice, r1)) ; encapct(a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2))), n(alice, r3)) ; (a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4)))) ; h(exp(g, n(bob, r5)) ; a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2)))) 
+                )
+            )),
+        +   (sessionstartr(
+                exp(g, n(bob, r1')),
+                encapct(a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))), n(bob, r2')),
+                a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))),
+                sig(
+                    bob, 
+                    n(bob, r4'),
+                    exp(g, n(bob, r1')) ; encapct(a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))), n(bob, r2')) ; (a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))))
+                )
+            )),
+        -   (asymratchet(
+                exp(g, n(alice, r7)),
+                encapct(a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))), n(alice, r8)),
+                a(h(n(alice, r9))) ** s(h(n(alice, r9))) ++ e(h(n(alice, r9))),
+                sig(
+                    alice,
+                    n(alice, r6),
+                    exp(g, n(alice, r7)) ; encapct(a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))), n(alice, r8)) ; (a(h(n(alice, r9))) ** s(h(n(alice, r9))) ++ e(h(n(alice, r9))))
+                )
+            ))     
+        | nil]
+        || encapss(a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))), n(bob, r2')) inI, empty
+        || nil
+        || nil
+        || nil
+    [nonexec] .
+
+    --- AsymmetricRatchet ecss
+    eq ATTACK-STATE(7) =
+        :: r1, r2, r3, r4, r5, r6, r7, r8, r9 ::
+        [nil, 
+        +   (sessionstarts(
+                exp(g, n(alice, r1)),
+                encapct(a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2))), n(alice, r3)),
+                a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))),
+                h(exp(g, n(bob, r5)) ; a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2)))),
+                sig(
+                    alice, 
+                    n(alice, r6), 
+                    exp(g, n(alice, r1)) ; encapct(a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2))), n(alice, r3)) ; (a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4)))) ; h(exp(g, n(bob, r5)) ; a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2)))) 
+                )
+            )),
+        -   (sessionstartr(
+                exp(g, n(bob, r1')),
+                encapct(a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))), n(bob, r2')),
+                a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))),
+                sig(
+                    bob, 
+                    n(bob, r4'),
+                    exp(g, n(bob, r1')) ; encapct(a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))), n(bob, r2')) ; (a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))))
+                )
+            )),
+        +   (asymratchet(
+                exp(g, n(alice, r7)),
+                encapct(a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))), n(alice, r8)),
+                a(h(n(alice, r9))) ** s(h(n(alice, r9))) ++ e(h(n(alice, r9))),
+                sig(
+                    alice,
+                    n(alice, r6),
+                    exp(g, n(alice, r7)) ; encapct(a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))), n(alice, r8)) ; (a(h(n(alice, r9))) ** s(h(n(alice, r9))) ++ e(h(n(alice, r9))))
+                )
+            ))  
+        | nil]  &
+
+		:: r1', r2', r3', r4' ::
+		[nil,
+		-   (sessionstarts(
+                exp(g, n(alice, r1)),
+                encapct(a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2))), n(alice, r3)),
+                a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))),
+                h(exp(g, n(bob, r5)) ; a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2)))),
+                sig(
+                    alice, 
+                    n(alice, r6), 
+                    exp(g, n(alice, r1)) ; encapct(a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2))), n(alice, r3)) ; (a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4)))) ; h(exp(g, n(bob, r5)) ; a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2)))) 
+                )
+            )),
+        +   (sessionstartr(
+                exp(g, n(bob, r1')),
+                encapct(a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))), n(bob, r2')),
+                a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))),
+                sig(
+                    bob, 
+                    n(bob, r4'),
+                    exp(g, n(bob, r1')) ; encapct(a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))), n(bob, r2')) ; (a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))))
+                )
+            )),
+        -   (asymratchet(
+                exp(g, n(alice, r7)),
+                encapct(a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))), n(alice, r8)),
+                a(h(n(alice, r9))) ** s(h(n(alice, r9))) ++ e(h(n(alice, r9))),
+                sig(
+                    alice,
+                    n(alice, r6),
+                    exp(g, n(alice, r7)) ; encapct(a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))), n(alice, r8)) ; (a(h(n(alice, r9))) ** s(h(n(alice, r9))) ++ e(h(n(alice, r9))))
+                )
+            ))     
+        | nil]
+        || exp(exp(g, n(bob, r1')), n(alice, r1)) inI, empty
+        || nil
+        || nil
+        || nil
+    [nonexec] .
+
+    --- AsymmetricRatchet pqss
+    eq ATTACK-STATE(8) =
+        :: r1, r2, r3, r4, r5, r6, r7, r8, r9 ::
+        [nil, 
+        +   (sessionstarts(
+                exp(g, n(alice, r1)),
+                encapct(a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2))), n(alice, r3)),
+                a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))),
+                h(exp(g, n(bob, r5)) ; a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2)))),
+                sig(
+                    alice, 
+                    n(alice, r6), 
+                    exp(g, n(alice, r1)) ; encapct(a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2))), n(alice, r3)) ; (a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4)))) ; h(exp(g, n(bob, r5)) ; a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2)))) 
+                )
+            )),
+        -   (sessionstartr(
+                exp(g, n(bob, r1')),
+                encapct(a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))), n(bob, r2')),
+                a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))),
+                sig(
+                    bob, 
+                    n(bob, r4'),
+                    exp(g, n(bob, r1')) ; encapct(a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))), n(bob, r2')) ; (a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))))
+                )
+            )),
+        +   (asymratchet(
+                exp(g, n(alice, r7)),
+                encapct(a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))), n(alice, r8)),
+                a(h(n(alice, r9))) ** s(h(n(alice, r9))) ++ e(h(n(alice, r9))),
+                sig(
+                    alice,
+                    n(alice, r6),
+                    exp(g, n(alice, r7)) ; encapct(a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))), n(alice, r8)) ; (a(h(n(alice, r9))) ** s(h(n(alice, r9))) ++ e(h(n(alice, r9))))
+                )
+            )) 
+        | nil]  &
+
+		:: r1', r2', r3', r4' ::
+		[nil,
+		-   (sessionstarts(
+                exp(g, n(alice, r1)),
+                encapct(a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2))), n(alice, r3)),
+                a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))),
+                h(exp(g, n(bob, r5)) ; a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2)))),
+                sig(
+                    alice, 
+                    n(alice, r6), 
+                    exp(g, n(alice, r1)) ; encapct(a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2))), n(alice, r3)) ; (a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4)))) ; h(exp(g, n(bob, r5)) ; a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2)))) 
+                )
+            )),
+        +   (sessionstartr(
+                exp(g, n(bob, r1')),
+                encapct(a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))), n(bob, r2')),
+                a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))),
+                sig(
+                    bob, 
+                    n(bob, r4'),
+                    exp(g, n(bob, r1')) ; encapct(a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))), n(bob, r2')) ; (a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))))
+                )
+            )),
+        -   (asymratchet(
+                exp(g, n(alice, r7)),
+                encapct(a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))), n(alice, r8)),
+                a(h(n(alice, r9))) ** s(h(n(alice, r9))) ++ e(h(n(alice, r9))),
+                sig(
+                    alice,
+                    n(alice, r6),
+                    exp(g, n(alice, r7)) ; encapct(a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))), n(alice, r8)) ; (a(h(n(alice, r9))) ** s(h(n(alice, r9))) ++ e(h(n(alice, r9))))
+                )
+            ))     
+        | nil]
+        || decap(s(h(n(alice, r4))), encapct(a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))), n(bob, r2'))) inI, empty
+        || nil
+        || nil
+        || nil
+    [nonexec] .
+
+    --- AsymmetricRatchet ecss'
+    eq ATTACK-STATE(9) =
+        :: r1, r2, r3, r4, r5, r6, r7, r8, r9 ::
+        [nil, 
+        +   (sessionstarts(
+                exp(g, n(alice, r1)),
+                encapct(a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2))), n(alice, r3)),
+                a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))),
+                h(exp(g, n(bob, r5)) ; a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2)))),
+                sig(
+                    alice, 
+                    n(alice, r6), 
+                    exp(g, n(alice, r1)) ; encapct(a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2))), n(alice, r3)) ; (a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4)))) ; h(exp(g, n(bob, r5)) ; a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2)))) 
+                )
+            )),
+        -   (sessionstartr(
+                exp(g, n(bob, r1')),
+                encapct(a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))), n(bob, r2')),
+                a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))),
+                sig(
+                    bob, 
+                    n(bob, r4'),
+                    exp(g, n(bob, r1')) ; encapct(a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))), n(bob, r2')) ; (a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))))
+                )
+            )),
+        +   (asymratchet(
+                exp(g, n(alice, r7)),
+                encapct(a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))), n(alice, r8)),
+                a(h(n(alice, r9))) ** s(h(n(alice, r9))) ++ e(h(n(alice, r9))),
+                sig(
+                    alice,
+                    n(alice, r6),
+                    exp(g, n(alice, r7)) ; encapct(a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))), n(alice, r8)) ; (a(h(n(alice, r9))) ** s(h(n(alice, r9))) ++ e(h(n(alice, r9))))
+                )
+            ))  
+        | nil]  &
+
+		:: r1', r2', r3', r4' ::
+		[nil,
+		-   (sessionstarts(
+                exp(g, n(alice, r1)),
+                encapct(a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2))), n(alice, r3)),
+                a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))),
+                h(exp(g, n(bob, r5)) ; a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2)))),
+                sig(
+                    alice, 
+                    n(alice, r6), 
+                    exp(g, n(alice, r1)) ; encapct(a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2))), n(alice, r3)) ; (a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4)))) ; h(exp(g, n(bob, r5)) ; a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2)))) 
+                )
+            )),
+        +   (sessionstartr(
+                exp(g, n(bob, r1')),
+                encapct(a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))), n(bob, r2')),
+                a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))),
+                sig(
+                    bob, 
+                    n(bob, r4'),
+                    exp(g, n(bob, r1')) ; encapct(a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))), n(bob, r2')) ; (a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))))
+                )
+            )),
+        -   (asymratchet(
+                exp(g, n(alice, r7)),
+                encapct(a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))), n(alice, r8)),
+                a(h(n(alice, r9))) ** s(h(n(alice, r9))) ++ e(h(n(alice, r9))),
+                sig(
+                    alice,
+                    n(alice, r6),
+                    exp(g, n(alice, r7)) ; encapct(a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))), n(alice, r8)) ; (a(h(n(alice, r9))) ** s(h(n(alice, r9))) ++ e(h(n(alice, r9))))
+                )
+            ))     
+        | nil]
+        || exp(exp(g, n(bob, r1')), n(alice, r7)) inI, empty
+        || nil
+        || nil
+        || nil
+    [nonexec] .
+
+    --- AsymmetricRatchet pqss'
+    eq ATTACK-STATE(10) =
+        :: r1, r2, r3, r4, r5, r6, r7, r8, r9 ::
+        [nil, 
+        +   (sessionstarts(
+                exp(g, n(alice, r1)),
+                encapct(a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2))), n(alice, r3)),
+                a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))),
+                h(exp(g, n(bob, r5)) ; a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2)))),
+                sig(
+                    alice, 
+                    n(alice, r6), 
+                    exp(g, n(alice, r1)) ; encapct(a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2))), n(alice, r3)) ; (a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4)))) ; h(exp(g, n(bob, r5)) ; a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2)))) 
+                )
+            )),
+        -   (sessionstartr(
+                exp(g, n(bob, r1')),
+                encapct(a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))), n(bob, r2')),
+                a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))),
+                sig(
+                    bob, 
+                    n(bob, r4'),
+                    exp(g, n(bob, r1')) ; encapct(a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))), n(bob, r2')) ; (a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))))
+                )
+            )),
+        +   (asymratchet(
+                exp(g, n(alice, r7)),
+                encapct(a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))), n(alice, r8)),
+                a(h(n(alice, r9))) ** s(h(n(alice, r9))) ++ e(h(n(alice, r9))),
+                sig(
+                    alice,
+                    n(alice, r6),
+                    exp(g, n(alice, r7)) ; encapct(a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))), n(alice, r8)) ; (a(h(n(alice, r9))) ** s(h(n(alice, r9))) ++ e(h(n(alice, r9))))
+                )
+            ))  
+        | nil]  &
+
+		:: r1', r2', r3', r4' ::
+		[nil,
+		-   (sessionstarts(
+                exp(g, n(alice, r1)),
+                encapct(a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2))), n(alice, r3)),
+                a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))),
+                h(exp(g, n(bob, r5)) ; a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2)))),
+                sig(
+                    alice, 
+                    n(alice, r6), 
+                    exp(g, n(alice, r1)) ; encapct(a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2))), n(alice, r3)) ; (a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4)))) ; h(exp(g, n(bob, r5)) ; a(h(n(bob, r2))) ** s(h(n(bob, r2))) ++ e(h(n(bob, r2)))) 
+                )
+            )),
+        +   (sessionstartr(
+                exp(g, n(bob, r1')),
+                encapct(a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))), n(bob, r2')),
+                a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))),
+                sig(
+                    bob, 
+                    n(bob, r4'),
+                    exp(g, n(bob, r1')) ; encapct(a(h(n(alice, r4))) ** s(h(n(alice, r4))) ++ e(h(n(alice, r4))), n(bob, r2')) ; (a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))))
+                )
+            )),
+        -   (asymratchet(
+                exp(g, n(alice, r7)),
+                encapct(a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))), n(alice, r8)),
+                a(h(n(alice, r9))) ** s(h(n(alice, r9))) ++ e(h(n(alice, r9))),
+                sig(
+                    alice,
+                    n(alice, r6),
+                    exp(g, n(alice, r7)) ; encapct(a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))), n(alice, r8)) ; (a(h(n(alice, r9))) ** s(h(n(alice, r9))) ++ e(h(n(alice, r9))))
+                )
+            ))      
+        | nil]
+        || encapss(a(h(n(bob, r3'))) ** s(h(n(bob, r3'))) ++ e(h(n(bob, r3'))), n(alice, r8)) inI, empty
+        || nil
+        || nil
+        || nil
+    [nonexec] .
+endfm
+
+select MAUDE-NPA .
