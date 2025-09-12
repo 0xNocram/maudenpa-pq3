@@ -6,8 +6,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 maude <<EOF
 
-load "${SCRIPT_DIR}/../../maude-npa.maude"
-load "${SCRIPT_DIR}/../../test/iMessage-PQ3.maude"
+load "${SCRIPT_DIR}/../maude-npa.maude"
+load "${SCRIPT_DIR}/../src/iMessage-PQ3.maude"
 
 red summary(9,0) .
 red summary(9,1) .
