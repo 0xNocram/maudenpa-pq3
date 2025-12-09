@@ -1,4 +1,4 @@
-This work is part of my Master's Thesis, which can be found at: PENDING_TO_BE_PUBLISHED
+This work is part of my Master's Thesis, which can be found at: https://riunet.upv.es/handle/10251/228577
 
 # iMessage-PQ3
 
